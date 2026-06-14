@@ -172,10 +172,16 @@ nickInput.addEventListener('keydown', (e) => {
 });
 
 const keys = {};
-let jumpPressed = false;
 document.addEventListener('keydown', (e) => {
-  keys[e.key.toLowerCase()] = true;
-  if (e.key === ' ' && !e.repeat) { jumpPressed = true; e.preventDefault(); }
+  const k = e.key.toLowerCase();
+  keys[k] = true;
+  if (k === ' ' || e.code === 'Space') {
+    if (me.onGround && me.id) {
+      me.vy = JUMP_FORCE;
+      me.onGround = false;
+    }
+    e.preventDefault();
+  }
 });
 document.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
@@ -197,12 +203,6 @@ function update() {
   me.vx = 0;
   if (keys['a']) { me.vx = -SPEED; me.dir = -1; }
   if (keys['d']) { me.vx = SPEED; me.dir = 1; }
-
-  if (jumpPressed && me.onGround) {
-    me.vy = JUMP_FORCE;
-    me.onGround = false;
-    jumpPressed = false;
-  }
 
   me.vy += GRAVITY;
   me.x += me.vx;
