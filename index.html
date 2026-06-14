@@ -14,15 +14,48 @@ canvas { display: block; }
   padding: 6px 16px; border-radius: 8px; pointer-events: none;
   z-index: 10;
 }
+#nickModal {
+  position: fixed; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.85); z-index: 100;
+}
+#nickModal .box {
+  background: #111; border: 1px solid #333; border-radius: 12px;
+  padding: 30px 40px; text-align: center;
+}
+#nickModal h2 {
+  color: #fff; font: 18px sans-serif; margin-bottom: 16px;
+}
+#nickModal input {
+  display: block; width: 220px; padding: 10px;
+  font: 16px sans-serif; border: none; border-radius: 6px;
+  text-align: center; margin-bottom: 12px; outline: none;
+}
+#nickModal button {
+  padding: 10px 30px; font: 16px sans-serif;
+  background: #fff; color: #000; border: none; border-radius: 6px;
+  cursor: pointer;
+}
+#nickModal button:hover { background: #ddd; }
 </style>
 </head>
 <body>
+<div id="nickModal">
+  <div class="box">
+    <h2>Podaj nick</h2>
+    <input type="text" id="nickInput" maxlength="16" autofocus>
+    <button id="nickBtn">Zatwierdź</button>
+  </div>
+</div>
 <div id="status">laczenie...</div>
 <canvas id="game"></canvas>
 <script>
 const canvas = document.getElementById('game');
 const ctx = canvas.getContext('2d');
 const statusEl = document.getElementById('status');
+const nickModal = document.getElementById('nickModal');
+const nickInput = document.getElementById('nickInput');
+const nickBtn = document.getElementById('nickBtn');
 
 let W, H;
 function resize() {
@@ -45,6 +78,8 @@ sprite.src = 'postac.png';
 let spriteLoaded = false;
 sprite.onload = () => { spriteLoaded = true; };
 
+let myNick = '';
+
 const me = {
   id: null,
   x: 0, y: 0,
@@ -54,38 +89,48 @@ const me = {
 
 const others = {};
 
-// Zmien na adres swojego serwera z HostingGuru po deployu
 const WS_URL = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
   ? 'ws://localhost:3000'
-  : 'https://lob-2629.apps.hostingguru.io';
+  : 'wss://lob-2629.apps.hostingguru.io';
 
 let ws;
 
 function connect() {
   ws = new WebSocket(WS_URL);
-  ws.onopen = () => { statusEl.textContent = 'polaczono'; };
+  ws.onopen = () => {
+    statusEl.textContent = 'polaczono';
+    ws.send(JSON.stringify({ type: 'join', nick: myNick }));
+  };
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     switch (msg.type) {
       case 'init':
         me.id = msg.id;
-        me.x = msg.x;
-        me.y = msg.y;
+        me.x = msg.xf * W;
+        me.y = (H * 0.75) - SPRITE_H + (msg.yOff || 0);
         for (const p of msg.players) {
-          if (p.id !== me.id) others[p.id] = { x: p.x, y: p.y };
+          if (p.id !== me.id) {
+            others[p.id] = { x: p.xf * W, y: (H * 0.75) - SPRITE_H + (p.yOff || 0), nick: p.nick || '' };
+          }
         }
         statusEl.textContent = 'polaczono (' + Object.keys(others).length + ' innych)';
+        sendMove();
         break;
       case 'player_joined':
         if (msg.id !== me.id) {
-          others[msg.id] = { x: msg.x, y: msg.y };
+          others[msg.id] = { x: msg.xf * W, y: (H * 0.75) - SPRITE_H + (msg.yOff || 0), nick: msg.nick || '' };
           statusEl.textContent = 'polaczono (' + Object.keys(others).length + ' innych)';
         }
         break;
       case 'player_moved':
         if (others[msg.id]) {
-          others[msg.id].x = msg.x;
-          others[msg.id].y = msg.y;
+          others[msg.id].x = msg.xf * W;
+          others[msg.id].y = (H * 0.75) - SPRITE_H + (msg.yOff || 0);
+        }
+        break;
+      case 'player_nick':
+        if (others[msg.id]) {
+          others[msg.id].nick = msg.nick;
         }
         break;
       case 'player_left':
@@ -101,7 +146,17 @@ function connect() {
   ws.onerror = () => {};
 }
 
-connect();
+nickBtn.addEventListener('click', () => {
+  const nick = nickInput.value.trim();
+  if (!nick) return;
+  myNick = nick;
+  nickModal.style.display = 'none';
+  connect();
+});
+
+nickInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') nickBtn.click();
+});
 
 const keys = {};
 document.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
@@ -112,8 +167,10 @@ function sendMove() {
   const now = Date.now();
   if (now - lastSend < 40) return;
   lastSend = now;
+  const xf = me.x / W;
+  const yOff = (me.y + SPRITE_H) - H * 0.75;
   if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: 'move', x: me.x, y: me.y }));
+    ws.send(JSON.stringify({ type: 'move', xf, yOff }));
   }
 }
 
@@ -150,6 +207,16 @@ function drawSprite(img, x, y, w, h, dir) {
   }
 }
 
+function drawNick(nick, x, y) {
+  if (!nick) return;
+  ctx.save();
+  ctx.fillStyle = '#fff';
+  ctx.font = '11px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(nick, x + SPRITE_W / 2, y - 4);
+  ctx.restore();
+}
+
 function draw() {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
@@ -166,6 +233,7 @@ function draw() {
       ctx.fillStyle = '#f44';
       ctx.fillRect(p.x, p.y, SPRITE_W, SPRITE_H);
     }
+    drawNick(p.nick, p.x, p.y);
   }
 
   if (me.id && spriteLoaded) {
@@ -174,6 +242,7 @@ function draw() {
     ctx.fillStyle = '#4f4';
     ctx.fillRect(me.x, me.y, SPRITE_W, SPRITE_H);
   }
+  drawNick(myNick, me.x, me.y);
 }
 
 function loop() {

@@ -11,40 +11,35 @@ const server = http.createServer((req, res) => {
 const wss = new WebSocket.Server({ server });
 
 const players = new Map();
-let nextX = 100;
-
-function spawnX() {
-  const x = nextX;
-  nextX += 70;
-  if (nextX > 1200) nextX = 100;
-  return x;
-}
 
 wss.on('connection', (ws) => {
   const id = Math.random().toString(36).slice(2, 10);
-  const x = spawnX();
-  const y = 0;
+  const xf = Math.random() * 0.5 + 0.15;
+  const yOff = 0;
 
-  const player = { id, x, y, ws };
+  const player = { id, xf, yOff, ws };
   players.set(id, player);
 
   ws.send(JSON.stringify({
     type: 'init',
     id,
-    x,
-    y,
-    players: Array.from(players.values()).map(p => ({ id: p.id, x: p.x, y: p.y }))
+    xf,
+    yOff,
+    players: Array.from(players.values()).map(p => ({ id: p.id, xf: p.xf, yOff: p.yOff, nick: p.nick || '' }))
   }));
 
-  broadcast({ type: 'player_joined', id, x, y }, id);
+  broadcast({ type: 'player_joined', id, xf, yOff, nick: '' }, id);
 
   ws.on('message', (raw) => {
     try {
       const msg = JSON.parse(raw);
-      if (msg.type === 'move') {
-        player.x = msg.x;
-        player.y = msg.y;
-        broadcast({ type: 'player_moved', id, x: msg.x, y: msg.y }, id);
+      if (msg.type === 'join') {
+        player.nick = msg.nick;
+        broadcast({ type: 'player_nick', id, nick: msg.nick }, id);
+      } else if (msg.type === 'move') {
+        player.xf = msg.xf;
+        player.yOff = msg.yOff;
+        broadcast({ type: 'player_moved', id, xf: msg.xf, yOff: msg.yOff }, id);
       }
     } catch (_) {}
   });
