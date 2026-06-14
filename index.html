@@ -78,13 +78,26 @@ sprite.src = 'postac.png';
 let spriteLoaded = false;
 sprite.onload = () => { spriteLoaded = true; };
 
+let spriteJump = new Image();
+spriteJump.src = 'postacjump.png';
+let spriteJumpLoaded = false;
+spriteJump.onload = () => { spriteJumpLoaded = true; };
+
+function getSprite(airborne) {
+  if (airborne && spriteJumpLoaded) return spriteJump;
+  return sprite;
+}
+
 let myNick = '';
+
+const JUMP_FORCE = -10;
 
 const me = {
   id: null,
   x: 0, y: 0,
   vx: 0, vy: 0,
-  dir: 1
+  dir: 1,
+  onGround: true
 };
 
 const others = {};
@@ -159,7 +172,11 @@ nickInput.addEventListener('keydown', (e) => {
 });
 
 const keys = {};
-document.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+let jumpPressed = false;
+document.addEventListener('keydown', (e) => {
+  keys[e.key.toLowerCase()] = true;
+  if (e.key === ' ' && !e.repeat) { jumpPressed = true; e.preventDefault(); }
+});
 document.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
 let lastSend = 0;
@@ -181,13 +198,22 @@ function update() {
   if (keys['a']) { me.vx = -SPEED; me.dir = -1; }
   if (keys['d']) { me.vx = SPEED; me.dir = 1; }
 
+  if (jumpPressed && me.onGround) {
+    me.vy = JUMP_FORCE;
+    me.onGround = false;
+    jumpPressed = false;
+  }
+
   me.vy += GRAVITY;
   me.x += me.vx;
   me.y += me.vy;
 
-  if (me.y + SPRITE_H > floorY) {
+  if (me.y + SPRITE_H >= floorY) {
     me.y = floorY - SPRITE_H;
     me.vy = 0;
+    me.onGround = true;
+  } else {
+    me.onGround = false;
   }
   if (me.x < 0) me.x = 0;
   if (me.x + SPRITE_W > W) me.x = W - SPRITE_W;
@@ -227,8 +253,10 @@ function draw() {
   ctx.imageSmoothingEnabled = false;
   for (const id in others) {
     const p = others[id];
+    const airborne = p.y + SPRITE_H < floorY;
+    const s = airborne ? spriteJump : sprite;
     if (spriteLoaded) {
-      drawSprite(sprite, p.x, p.y, SPRITE_W, SPRITE_H, 1);
+      drawSprite(s, p.x, p.y, SPRITE_W, SPRITE_H, 1);
     } else {
       ctx.fillStyle = '#f44';
       ctx.fillRect(p.x, p.y, SPRITE_W, SPRITE_H);
@@ -237,7 +265,8 @@ function draw() {
   }
 
   if (me.id && spriteLoaded) {
-    drawSprite(sprite, me.x, me.y, SPRITE_W, SPRITE_H, me.dir);
+    const s = me.onGround ? sprite : spriteJump;
+    drawSprite(s, me.x, me.y, SPRITE_W, SPRITE_H, me.dir);
   } else if (me.id) {
     ctx.fillStyle = '#4f4';
     ctx.fillRect(me.x, me.y, SPRITE_W, SPRITE_H);
