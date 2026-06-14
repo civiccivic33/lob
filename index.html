@@ -14,6 +14,15 @@ canvas { display: block; }
   padding: 6px 16px; border-radius: 8px; pointer-events: none;
   z-index: 10;
 }
+#cooldownBar {
+  position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+  width: 160px; height: 6px; background: rgba(255,255,255,0.2);
+  border-radius: 3px; z-index: 10; display: none;
+}
+#cooldownBar div {
+  height: 100%; width: 0%; background: #fff;
+  border-radius: 3px; transition: width 0.1s;
+}
 #nickModal {
   position: fixed; inset: 0;
   display: flex; align-items: center; justify-content: center;
@@ -48,6 +57,7 @@ canvas { display: block; }
   </div>
 </div>
 <div id="status">laczenie...</div>
+<div id="cooldownBar"><div id="cooldownFill"></div></div>
 <canvas id="game"></canvas>
 <script>
 const canvas = document.getElementById('game');
@@ -56,6 +66,8 @@ const statusEl = document.getElementById('status');
 const nickModal = document.getElementById('nickModal');
 const nickInput = document.getElementById('nickInput');
 const nickBtn = document.getElementById('nickBtn');
+const cooldownBar = document.getElementById('cooldownBar');
+const cooldownFill = document.getElementById('cooldownFill');
 
 let W, H;
 function resize() {
@@ -65,32 +77,38 @@ function resize() {
 resize();
 window.addEventListener('resize', resize);
 
-const FLOOR_Y_RATIO = 0.75;
+const GRID_COLS = 80;
+const GRID_ROWS = 50;
+const FLOOR_ROW = Math.floor(0.75 * GRID_ROWS);
+const COOLDOWN_MS = 3000;
 const GRAVITY = 0.6;
 const SPEED = 4.5;
 const SPRITE_W = 40;
 const SPRITE_H = 90;
+const JUMP_FORCE = -10;
 
-let floorY = H * FLOOR_Y_RATIO;
+let floorY = H * 0.75;
 
 let sprite = new Image();
 sprite.src = 'postac.png';
 let spriteLoaded = false;
 sprite.onload = () => { spriteLoaded = true; };
-
 let spriteJump = new Image();
 spriteJump.src = 'postacjump.png';
 let spriteJumpLoaded = false;
 spriteJump.onload = () => { spriteJumpLoaded = true; };
 
-function getSprite(airborne) {
-  if (airborne && spriteJumpLoaded) return spriteJump;
-  return sprite;
+const addedBlocks = new Set();
+const removedBlocks = new Set();
+let cooldownUntil = 0;
+
+function isFilled(col, row) {
+  if (col < 0 || col >= GRID_COLS || row < 0 || row >= GRID_ROWS) return false;
+  if (row >= FLOOR_ROW) return !removedBlocks.has(col + ',' + row);
+  return addedBlocks.has(col + ',' + row);
 }
 
 let myNick = '';
-
-const JUMP_FORCE = -10;
 
 const me = {
   id: null,
@@ -121,6 +139,12 @@ function connect() {
         me.id = msg.id;
         me.x = msg.xf * W;
         me.y = (H * 0.75) - SPRITE_H + (msg.yOff || 0);
+        addedBlocks.clear();
+        removedBlocks.clear();
+        if (msg.blocks) {
+          for (const k of msg.blocks.added) addedBlocks.add(k);
+          for (const k of msg.blocks.removed) removedBlocks.add(k);
+        }
         for (const p of msg.players) {
           if (p.id !== me.id) {
             others[p.id] = { x: p.xf * W, y: (H * 0.75) - SPRITE_H + (p.yOff || 0), nick: p.nick || '' };
@@ -142,13 +166,19 @@ function connect() {
         }
         break;
       case 'player_nick':
-        if (others[msg.id]) {
-          others[msg.id].nick = msg.nick;
-        }
+        if (others[msg.id]) others[msg.id].nick = msg.nick;
         break;
       case 'player_left':
         delete others[msg.id];
         statusEl.textContent = 'polaczono (' + Object.keys(others).length + ' innych)';
+        break;
+      case 'block_place':
+        if (msg.row >= FLOOR_ROW) removedBlocks.delete(msg.col + ',' + msg.row);
+        else addedBlocks.add(msg.col + ',' + msg.row);
+        break;
+      case 'block_remove':
+        if (msg.row >= FLOOR_ROW) removedBlocks.add(msg.col + ',' + msg.row);
+        else addedBlocks.delete(msg.col + ',' + msg.row);
         break;
     }
   };
@@ -185,6 +215,33 @@ document.addEventListener('keydown', (e) => {
 });
 document.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
 
+canvas.addEventListener('mousedown', (e) => {
+  if (!me.id) return;
+  const now = Date.now();
+  if (now < cooldownUntil) return;
+
+  const col = Math.floor(e.clientX * GRID_COLS / W);
+  const row = Math.floor(e.clientY * GRID_ROWS / H);
+  if (col < 0 || col >= GRID_COLS || row < 0 || row >= GRID_ROWS) return;
+
+  if (e.button === 0) {
+    if (isFilled(col, row)) return;
+    cooldownUntil = now + COOLDOWN_MS;
+    cooldownBar.style.display = 'block';
+    if (row >= FLOOR_ROW) removedBlocks.delete(col + ',' + row);
+    else addedBlocks.add(col + ',' + row);
+    ws.send(JSON.stringify({ type: 'block_place', col, row }));
+  } else if (e.button === 2) {
+    if (!isFilled(col, row)) return;
+    cooldownUntil = now + COOLDOWN_MS;
+    cooldownBar.style.display = 'block';
+    if (row >= FLOOR_ROW) removedBlocks.add(col + ',' + row);
+    else addedBlocks.delete(col + ',' + row);
+    ws.send(JSON.stringify({ type: 'block_remove', col, row }));
+  }
+});
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
 let lastSend = 0;
 function sendMove() {
   const now = Date.now();
@@ -198,7 +255,7 @@ function sendMove() {
 }
 
 function update() {
-  floorY = H * FLOOR_Y_RATIO;
+  floorY = H * 0.75;
 
   me.vx = 0;
   if (keys['a']) { me.vx = -SPEED; me.dir = -1; }
@@ -219,6 +276,13 @@ function update() {
   if (me.x + SPRITE_W > W) me.x = W - SPRITE_W;
 
   sendMove();
+
+  const remaining = cooldownUntil - Date.now();
+  if (remaining > 0) {
+    cooldownFill.style.width = (remaining / COOLDOWN_MS * 100) + '%';
+  } else {
+    cooldownBar.style.display = 'none';
+  }
 }
 
 function drawSprite(img, x, y, w, h, dir) {
@@ -247,14 +311,22 @@ function draw() {
   ctx.fillStyle = '#000';
   ctx.fillRect(0, 0, W, H);
 
+  const cellW = W / GRID_COLS;
+  const cellH = H / GRID_ROWS;
   ctx.fillStyle = '#fff';
-  ctx.fillRect(0, floorY, W, H - floorY);
+  for (let row = 0; row < GRID_ROWS; row++) {
+    for (let col = 0; col < GRID_COLS; col++) {
+      if (isFilled(col, row)) {
+        ctx.fillRect(col * cellW, row * cellH, Math.ceil(cellW), Math.ceil(cellH));
+      }
+    }
+  }
 
   ctx.imageSmoothingEnabled = false;
   for (const id in others) {
     const p = others[id];
     const airborne = p.y + SPRITE_H < floorY;
-    const s = airborne ? spriteJump : sprite;
+    const s = airborne && spriteJumpLoaded ? spriteJump : sprite;
     if (spriteLoaded) {
       drawSprite(s, p.x, p.y, SPRITE_W, SPRITE_H, 1);
     } else {
@@ -265,7 +337,7 @@ function draw() {
   }
 
   if (me.id && spriteLoaded) {
-    const s = me.onGround ? sprite : spriteJump;
+    const s = me.onGround ? sprite : (spriteJumpLoaded ? spriteJump : sprite);
     drawSprite(s, me.x, me.y, SPRITE_W, SPRITE_H, me.dir);
   } else if (me.id) {
     ctx.fillStyle = '#4f4';
