@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lob</title>
+<style>
+* { margin: 0; padding: 0; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #000; }
+canvas { display: block; }
+#status {
+  position: fixed; top: 12px; left: 50%; transform: translateX(-50%);
+  color: #aaa; font: 14px monospace; background: rgba(0,0,0,0.7);
+  padding: 6px 16px; border-radius: 8px; pointer-events: none;
+  z-index: 10;
+}
+</style>
+</head>
+<body>
+<div id="status">laczenie...</div>
+<canvas id="game"></canvas>
+<script>
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+
+let W, H;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+resize();
+window.addEventListener('resize', resize);
+
+const FLOOR_Y_RATIO = 0.75;
+const GRAVITY = 0.6;
+const SPEED = 4.5;
+const SPRITE_W = 40;
+const SPRITE_H = 90;
+
+let floorY = H * FLOOR_Y_RATIO;
+
+let sprite = new Image();
+sprite.src = 'postac.png';
+let spriteLoaded = false;
+sprite.onload = () => { spriteLoaded = true; };
+
+const me = {
+  id: null,
+  x: 0, y: 0,
+  vx: 0, vy: 0,
+  dir: 1
+};
+
+const others = {};
+
+// Zmien na adres swojego serwera z HostingGuru po deployu
+const WS_URL = location.hostname === 'localhost' || location.hostname === '127.0.0.1'
+  ? 'ws://localhost:3000'
+  : 'wss://twoj-serwer.hostingguru.io';
+
+let ws;
+
+function connect() {
+  ws = new WebSocket(WS_URL);
+  ws.onopen = () => { statusEl.textContent = 'polaczono'; };
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    switch (msg.type) {
+      case 'init':
+        me.id = msg.id;
+        me.x = msg.x;
+        me.y = msg.y;
+        for (const p of msg.players) {
+          if (p.id !== me.id) others[p.id] = { x: p.x, y: p.y };
+        }
+        statusEl.textContent = 'polaczono (' + Object.keys(others).length + ' innych)';
+        break;
+      case 'player_joined':
+        if (msg.id !== me.id) {
+          others[msg.id] = { x: msg.x, y: msg.y };
+          statusEl.textContent = 'polaczono (' + Object.keys(others).length + ' innych)';
+        }
+        break;
+      case 'player_moved':
+        if (others[msg.id]) {
+          others[msg.id].x = msg.x;
+          others[msg.id].y = msg.y;
+        }
+        break;
+      case 'player_left':
+        delete others[msg.id];
+        statusEl.textContent = 'polaczono (' + Object.keys(others).length + ' innych)';
+        break;
+    }
+  };
+  ws.onclose = () => {
+    statusEl.textContent = 'rozłączono, ponawiam...';
+    setTimeout(connect, 2000);
+  };
+  ws.onerror = () => {};
+}
+
+connect();
+
+const keys = {};
+document.addEventListener('keydown', (e) => { keys[e.key.toLowerCase()] = true; });
+document.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
+
+let lastSend = 0;
+function sendMove() {
+  const now = Date.now();
+  if (now - lastSend < 40) return;
+  lastSend = now;
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'move', x: me.x, y: me.y }));
+  }
+}
+
+function update() {
+  floorY = H * FLOOR_Y_RATIO;
+
+  me.vx = 0;
+  if (keys['a']) { me.vx = -SPEED; me.dir = -1; }
+  if (keys['d']) { me.vx = SPEED; me.dir = 1; }
+
+  me.vy += GRAVITY;
+  me.x += me.vx;
+  me.y += me.vy;
+
+  if (me.y + SPRITE_H > floorY) {
+    me.y = floorY - SPRITE_H;
+    me.vy = 0;
+  }
+  if (me.x < 0) me.x = 0;
+  if (me.x + SPRITE_W > W) me.x = W - SPRITE_W;
+
+  sendMove();
+}
+
+function drawSprite(img, x, y, w, h, dir) {
+  if (dir === -1) {
+    ctx.save();
+    ctx.translate(x + w / 2, y + h / 2);
+    ctx.scale(-1, 1);
+    ctx.drawImage(img, -w / 2, -h / 2, w, h);
+    ctx.restore();
+  } else {
+    ctx.drawImage(img, x, y, w, h);
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#000';
+  ctx.fillRect(0, 0, W, H);
+
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, floorY, W, H - floorY);
+
+  ctx.imageSmoothingEnabled = false;
+  for (const id in others) {
+    const p = others[id];
+    if (spriteLoaded) {
+      drawSprite(sprite, p.x, p.y, SPRITE_W, SPRITE_H, 1);
+    } else {
+      ctx.fillStyle = '#f44';
+      ctx.fillRect(p.x, p.y, SPRITE_W, SPRITE_H);
+    }
+  }
+
+  if (me.id && spriteLoaded) {
+    drawSprite(sprite, me.x, me.y, SPRITE_W, SPRITE_H, me.dir);
+  } else if (me.id) {
+    ctx.fillStyle = '#4f4';
+    ctx.fillRect(me.x, me.y, SPRITE_W, SPRITE_H);
+  }
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+loop();
+</script>
+</body>
+</html>
